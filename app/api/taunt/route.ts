@@ -74,71 +74,77 @@ function getBestMove(board: (string | null)[]) {
   return move;
 }
 
+const posMap: Record<number, string> = {
+  0: "左上角",
+  1: "顶部中间",
+  2: "右上角",
+  3: "左边中间",
+  4: "中心位置",
+  5: "右边中间",
+  6: "左下角",
+  7: "底部中间",
+  8: "右下角",
+};
 // 3. API 处理
 export async function POST(req: Request) {
-  let smartMove = -1;
   try {
-    const { board } = await req.json();
-
-    // 算法先行，保证智商
-    smartMove = getBestMove([...board]);
-
-    // 读取 DeepSeek Key
+    // 关键：现在我们要接收 board 和之前的 messages 列表
+    const { board, history, userMove } = await req.json();
     const apiKey = process.env.DEEPSEEK_API_KEY;
     const agent = new HttpsProxyAgent("http://127.0.0.1:52539");
 
-    // 结果判定
+    const smartMove = getBestMove([...board]);
     const nextBoard = [...board];
     if (smartMove !== -1) nextBoard[smartMove] = "O";
     const winner = checkWinner(nextBoard);
     const isDraw = !nextBoard.includes(null) && !winner;
 
-    // 提示词：根据输赢给 DeepSeek 不同压力
-    let dynamicPrompt = `你下在索引${smartMove}。`;
-    if (winner === "O")
-      dynamicPrompt += "你赢了！请用极其傲慢、嘲讽的语气羞辱玩家的智商。";
-    else if (isDraw)
-      dynamicPrompt += "平局。嘲讽玩家费尽心机也只能拿个平局，永远赢不了 AI。";
-    else
-      dynamicPrompt += "玩家这一步太嫩了，你已经预判了他的预判，请毒舌嘲讽他。";
+    const playerPos = posMap[userMove] || "某个位置";
+    const aiPos = posMap[smartMove] || "某个位置";
+    // 构造当前局面的描述
+    let dynamicPrompt = `玩家刚刚下在了【${playerPos}】。作为回应，你下在了【${aiPos}】。`;
 
-    // 呼叫 DeepSeek API
+    if (winner === "O") {
+      dynamicPrompt += `你这一手直接在${aiPos}完成了绝杀，你赢了！请用最狂妄的话羞辱玩家下的那手${playerPos}简直是自寻死路。`;
+    } else if (isDraw) {
+      dynamicPrompt += `这局平了。嘲讽玩家即便占了${playerPos}也没能赢过你。`;
+    } else {
+      dynamicPrompt += `请针对玩家下的【${playerPos}】写一句极其损人的短评，并解释为什么你下在【${aiPos}】更高明。`;
+    }
+
+    // 构造发送给 DeepSeek 的消息数组
+    // 我们把历史记录也塞进去，让 AI 记得它之前骂过什么
+    const apiMessages = [
+      {
+        role: "system",
+        content:
+          "你是一个毒舌的三子棋战神。你会记得之前的对话，如果玩家回怼你，你要更狠地怼回去。保持回复在 20 字以内。",
+      },
+      ...history, // 展开之前的历史记录
+      {
+        role: "user",
+        content: `当前棋盘：${JSON.stringify(board)}。${dynamicPrompt}`,
+      },
+    ];
+
     const response = await axios.post(
       "https://api.deepseek.com/chat/completions",
       {
         model: "deepseek-chat",
-        messages: [
-          {
-            role: "system",
-            content:
-              "你是一个毒舌的三子棋大师。用 15 字以内的一句话回复，不许啰嗦，不许重复。",
-          },
-          { role: "user", content: dynamicPrompt },
-        ],
-        temperature: 1.2,
+        messages: apiMessages,
+        temperature: 1.3,
       },
       {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${apiKey}` },
         httpsAgent: agent,
         proxy: false,
-        timeout: 8000,
       },
     );
 
-    return NextResponse.json({
-      move: smartMove,
-      taunt: response.data.choices[0].message.content.trim(),
-    });
+    const taunt = response.data.choices[0].message.content.trim();
+    return NextResponse.json({ move: smartMove, taunt });
   } catch (error: any) {
-    console.error("❌ DeepSeek 报错:", error.response?.data || error.message);
-
-    // 即使 API 失败（比如 Key 无效），也要让棋盘动起来
-    return NextResponse.json({
-      move: smartMove,
-      taunt: "（AI 此时正想喷你，但因为你的 API Key 或网络问题，它憋回去了）",
-    });
+    console.error("❌ 错误:", error.message);
+    return NextResponse.json({ move: 0, taunt: "（信号不好，先放你一马）" });
   }
 }

@@ -1,12 +1,26 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+}
 
 export default function Home() {
   const [squares, setSquares] = useState<(string | null)[]>(
     Array(9).fill(null),
   );
-  const [taunt, setTaunt] = useState("快点，别让我等太久。");
+  // 核心：对话历史状态
+  const [messages, setMessages] = useState<Message[]>([
+    { role: "assistant", content: "愚蠢的人类，想挑战我？先让你一步。" },
+  ]);
   const [loading, setLoading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 自动滚动到聊天底部
+  useEffect(() => {
+    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
+  }, [messages]);
 
   const calculateWinner = (sq: (string | null)[]) => {
     const lines = [
@@ -28,53 +42,57 @@ export default function Home() {
   const winner = calculateWinner(squares);
 
   async function handleClick(i: number) {
-    // 轮到玩家走，如果格子有子或有人赢了，不执行
     if (squares[i] || winner || loading) return;
 
-    // 1. 玩家落子 (X)
+    // 1. 玩家下棋
     const newSquares = [...squares];
     newSquares[i] = "X";
     setSquares(newSquares);
 
-    if (calculateWinner(newSquares) || !newSquares.includes(null)) {
-      setTaunt("游戏结束了，虽然结果早已注定。");
-      return;
-    }
-
-    // 2. 呼叫 AI 决定下一步
+    // 总是调用AI，让它回复，即使游戏结束
     setLoading(true);
     try {
+      // 2. 发送请求，带上当前棋盘和历史对话
       const res = await fetch("/api/taunt", {
         method: "POST",
-        body: JSON.stringify({ board: newSquares }),
+        body: JSON.stringify({
+          board: newSquares,
+          history: messages,
+          userMove: i,
+        }),
       });
       const data = await res.json();
 
-      // 3. AI 落子 (O) 并更新嘲讽
-      const aiSquares = [...newSquares];
-      if (data.move !== undefined) {
+      // 3. 更新棋盘和消息列表
+      // 只有当游戏还没结束时，才让AI下棋
+      const gameEnded =
+        calculateWinner(newSquares) || !newSquares.includes(null);
+      if (data.move !== undefined && !gameEnded) {
+        const aiSquares = [...newSquares];
         aiSquares[data.move] = "O";
         setSquares(aiSquares);
       }
-      setTaunt(data.taunt);
+
+      // 把 AI 的新嘲讽加入历史
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: data.taunt },
+      ]);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main className="flex h-screen bg-slate-950 text-white">
-      {/* 棋盘区 */}
-      <div className="flex-1 flex flex-col items-center justify-center border-r border-slate-800">
-        <h1 className="text-3xl font-black mb-8 text-cyan-400">
-          AI 嘲讽对弈局
-        </h1>
+    <main className="flex h-screen bg-slate-950 text-white overflow-hidden">
+      {/* 左侧：棋盘区 */}
+      <div className="flex-1 flex flex-col items-center justify-center p-4">
         <div className="grid grid-cols-3 gap-3">
           {squares.map((v, i) => (
             <button
               key={i}
               onClick={() => handleClick(i)}
-              className="w-24 h-24 bg-slate-800 hover:bg-slate-700 text-4xl font-bold rounded-xl flex items-center justify-center transition-all"
+              className="w-20 h-20 md:w-28 md:h-28 bg-slate-800 hover:bg-slate-700 text-4xl font-bold rounded-2xl flex items-center justify-center transition-all shadow-xl"
             >
               <span className={v === "X" ? "text-cyan-400" : "text-rose-500"}>
                 {v}
@@ -82,21 +100,56 @@ export default function Home() {
             </button>
           ))}
         </div>
-        <button
-          onClick={() => setSquares(Array(9).fill(null))}
-          className="mt-10 opacity-50 hover:opacity-100"
-        >
-          清空
-        </button>
       </div>
 
-      {/* 嘲讽区 */}
-      <div className="w-80 p-8 bg-slate-900">
-        <h2 className="text-xl font-bold mb-4">毒舌 AI 对手</h2>
+      {/* 右侧：聊天沙盒区 */}
+      <div className="w-full max-w-sm bg-slate-900 flex flex-col border-l border-slate-800 shadow-2xl">
+        <div className="p-6 border-b border-slate-800 flex justify-between items-center">
+          <h2 className="font-black text-xl text-rose-500 tracking-tighter">
+            AI TAUNT BOX
+          </h2>
+          <button
+            onClick={() => {
+              setSquares(Array(9).fill(null));
+              setMessages([
+                {
+                  role: "assistant",
+                  content: "重来？哪怕重来一万次你也是输。",
+                },
+              ]);
+            }}
+            className="text-xs text-slate-500 hover:text-white uppercase"
+          >
+            Reset
+          </button>
+        </div>
+
+        {/* 气泡列表 */}
         <div
-          className={`p-4 rounded-xl bg-slate-800 border-l-4 border-rose-500 italic ${loading ? "animate-pulse" : ""}`}
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth"
         >
-          “{taunt}”
+          {messages.map((m, idx) => (
+            <div
+              key={idx}
+              className={`flex ${m.role === "assistant" ? "justify-start" : "justify-end"}`}
+            >
+              <div
+                className={`max-w-[80%] p-3 rounded-2xl text-sm leading-relaxed ${
+                  m.role === "assistant"
+                    ? "bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700"
+                    : "bg-rose-600 text-white rounded-tr-none shadow-lg shadow-rose-900/20"
+                }`}
+              >
+                {m.content}
+              </div>
+            </div>
+          ))}
+          {loading && (
+            <div className="text-xs text-slate-500 animate-pulse italic">
+              AI 正在斟酌如何喷你...
+            </div>
+          )}
         </div>
       </div>
     </main>
