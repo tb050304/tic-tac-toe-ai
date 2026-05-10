@@ -1,25 +1,7 @@
 import { NextResponse } from "next/server";
 import axios from "axios";
 import { HttpsProxyAgent } from "https-proxy-agent";
-
-// 1. 判定胜负函数
-function checkWinner(squares: (string | null)[]) {
-  const lines = [
-    [0, 1, 2],
-    [3, 4, 5],
-    [6, 7, 8],
-    [0, 3, 6],
-    [1, 4, 7],
-    [2, 5, 8],
-    [0, 4, 8],
-    [2, 4, 6],
-  ];
-  for (let [a, b, c] of lines) {
-    if (squares[a] && squares[a] === squares[b] && squares[a] === squares[c])
-      return squares[a];
-  }
-  return null;
-}
+import { calculateWinner } from "@/lib/gameLogic";
 
 // 2. 无敌 Minimax 算法 (大脑)
 function getBestMove(board: (string | null)[]) {
@@ -28,7 +10,7 @@ function getBestMove(board: (string | null)[]) {
     depth: number,
     isMaximizing: boolean,
   ): number {
-    const winner = checkWinner(squares);
+    const winner = calculateWinner(squares);
     if (winner === "O") return 10 - depth;
     if (winner === "X") return depth - 10;
     if (!squares.includes(null)) return 0;
@@ -91,12 +73,18 @@ export async function POST(req: Request) {
     // 关键：现在我们要接收 board 和之前的 messages 列表
     const { board, history, userMove } = await req.json();
     const apiKey = process.env.DEEPSEEK_API_KEY;
-    const agent = new HttpsProxyAgent("http://127.0.0.1:52539");
+    const proxyUrl = process.env.HTTP_PROXY;
+    const baseUrl =
+      process.env.DEEPSEEK_BASE_URL ||
+      "https://api.deepseek.com/chat/completions";
+    const model = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+
+    const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
     const smartMove = getBestMove([...board]);
     const nextBoard = [...board];
     if (smartMove !== -1) nextBoard[smartMove] = "O";
-    const winner = checkWinner(nextBoard);
+    const winner = calculateWinner(nextBoard);
     const isDraw = !nextBoard.includes(null) && !winner;
 
     const playerPos = posMap[userMove] || "某个位置";
@@ -128,15 +116,15 @@ export async function POST(req: Request) {
     ];
 
     const response = await axios.post(
-      "https://api.deepseek.com/chat/completions",
+      baseUrl,
       {
-        model: "deepseek-chat",
+        model: model,
         messages: apiMessages,
         temperature: 1.3,
       },
       {
         headers: { Authorization: `Bearer ${apiKey}` },
-        httpsAgent: agent,
+        ...(agent ? { httpsAgent: agent } : {}),
         proxy: false,
       },
     );
